@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---- 1. Получаем Hikka (пока не используется, но оставим) ----
+      # ---- 1. Получаем Hikka (пока не используется) ----
       - name: Clone Hikka
         run: |
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/site-packages
@@ -28,7 +28,7 @@ jobs:
             rm hikka.zip
           fi
 
-      # ---- 2. Установка Python (пока не используется, но оставим) ----
+      # ---- 2. Установка Python (опционально) ----
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -41,8 +41,8 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python для iOS (опционально) ----
-      - name: Download Python framework (optional)
+      # ---- 3. Скачиваем Python для iOS ----
+      - name: Download Python framework
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
@@ -68,29 +68,25 @@ jobs:
           find . -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
           echo "✅ Python resources prepared"
 
-      # ---- 4. Создаём простое SwiftUI приложение (без внешних зависимостей) ----
+      # ---- 4. Создаём простейшее SwiftUI приложение ----
       - name: Create Swift sources
         run: |
           mkdir -p Sources
-          cat > Sources/HikkaWrapperApp.swift <<'EOF'
+          cat > Sources/main.swift <<'EOF'
           import SwiftUI
 
           @main
-          struct HikkaWrapperApp: App {
+          struct AppMain: App {
               var body: some Scene {
                   WindowGroup {
                       ContentView()
                   }
               }
           }
-          EOF
-
-          cat > Sources/ContentView.swift <<'EOF'
-          import SwiftUI
 
           struct ContentView: View {
-              @State private var log = "Готов к работе!"
               @State private var counter = 0
+              @State private var log = "Нажми кнопку"
 
               var body: some View {
                   VStack(spacing: 20) {
@@ -100,13 +96,13 @@ jobs:
                       Text("Hikka Wrapper")
                           .font(.largeTitle)
                           .fontWeight(.bold)
-                      Text("iOS Python Userbot")
+                      Text("iOS Userbot")
                           .font(.subheadline)
                           .foregroundColor(.gray)
 
                       Button(action: {
                           counter += 1
-                          log = "Нажатий: \(counter)\nПоследнее действие: \(Date())"
+                          log = "Нажатий: \(counter)\nПоследнее: \(Date())"
                       }) {
                           Text("Нажми меня")
                               .padding()
@@ -133,13 +129,13 @@ jobs:
           }
           EOF
 
-      # ---- 5. Компилируем Swift в бинарник для iOS ----
+      # ---- 5. Компилируем в бинарник для iOS ----
       - name: Compile Swift
         run: |
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           swiftc -emit-executable \
             -o Sources/HikkaWrapper \
-            Sources/HikkaWrapperApp.swift Sources/ContentView.swift \
+            Sources/main.swift \
             -sdk "$SDK_PATH" \
             -target arm64-apple-ios14.0 \
             -O \
@@ -147,6 +143,17 @@ jobs:
             -framework UIKit \
             -framework SwiftUI
           file Sources/HikkaWrapper
+
+          # Проверяем, что бинарник создан и является Mach-O
+          if [ ! -f Sources/HikkaWrapper ]; then
+            echo "❌ Бинарник не создан!"
+            exit 1
+          fi
+          file Sources/HikkaWrapper | grep -q "Mach-O" || {
+            echo "❌ Бинарник не является Mach-O!"
+            exit 1
+          }
+          echo "✅ Бинарник успешно создан и проверен"
 
       # ---- 6. Создаём .app ----
       - name: Create .app bundle
@@ -157,7 +164,6 @@ jobs:
 
           cp Sources/HikkaWrapper Payload/HikkaWrapper.app/
 
-          # Копируем Python.framework и pythonlib (если есть)
           if [ -d "HikkaWrapper/Resources/Python.framework" ]; then
             cp -R HikkaWrapper/Resources/Python.framework Payload/HikkaWrapper.app/Frameworks/
           fi
@@ -198,6 +204,7 @@ jobs:
           EOF
 
           echo "✅ .app bundle created"
+          ls -la Payload/HikkaWrapper.app/
 
       # ---- 7. Упаковываем в IPA ----
       - name: Package IPA
