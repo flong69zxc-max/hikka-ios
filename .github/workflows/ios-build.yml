@@ -38,27 +38,78 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python.framework для iOS ----
+      # ---- 3. Скачиваем и распаковываем Python.framework для iOS ----
       - name: Download Python framework
         run: |
+          # Скачиваем архив
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b4/Python-3.10-iOS-support.b4.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
+
+          # Выводим структуру для отладки
+          echo "=== Contents of extracted archive ==="
+          ls -la
+          echo "=== Searching for Python.framework ==="
+          find . -name "Python.framework" -type d
+          echo "=== Searching for python-stdlib ==="
+          find . -name "python-stdlib" -type d
+
+          # Находим пути
+          FRAMEWORK_PATH=$(find . -name "Python.framework" -type d | head -1)
+          STDLIB_PATH=$(find . -name "python-stdlib" -type d | head -1)
+
+          if [ -z "$FRAMEWORK_PATH" ]; then
+            echo "⚠️ Python.framework not found in archive, trying alternative location..."
+            # Возможно, архив содержит папку с именем "Python" или "python-ios"
+            FRAMEWORK_PATH=$(find . -path "*/Python.framework" -type d | head -1)
+          fi
+
+          if [ -z "$STDLIB_PATH" ]; then
+            echo "⚠️ python-stdlib not found, trying alternative..."
+            STDLIB_PATH=$(find . -path "*/python-stdlib" -type d | head -1)
+          fi
+
+          if [ -z "$FRAMEWORK_PATH" ] || [ -z "$STDLIB_PATH" ]; then
+            echo "❌ Could not find required Python components. Exiting."
+            exit 1
+          fi
+
+          echo "✅ Found Python.framework at: $FRAMEWORK_PATH"
+          echo "✅ Found python-stdlib at: $STDLIB_PATH"
+
+          # Создаём целевые папки
           mkdir -p HikkaWrapper/Resources/Python.framework
+          mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
-          cp -R Python/Resources/Python.framework/* HikkaWrapper/Resources/Python.framework/
-          cp -R Python/Resources/python-stdlib/lib/python3.10/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-          find Python/Resources/lib -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
+
+          # Копируем фреймворк
+          cp -R "$FRAMEWORK_PATH"/* HikkaWrapper/Resources/Python.framework/
+          echo "✅ Python.framework copied"
+
+          # Копируем стандартную библиотеку
+          if [ -d "$STDLIB_PATH/lib/python3.10" ]; then
+            cp -R "$STDLIB_PATH/lib/python3.10"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+          else
+            # Возможно, структура другая
+            cp -R "$STDLIB_PATH"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+          fi
+          echo "✅ python-stdlib copied"
+
+          # Копируем динамические библиотеки (если есть)
+          if [ -d "$STDLIB_PATH/../lib" ]; then
+            find "$STDLIB_PATH/../lib" -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
+          fi
+          echo "✅ Dynamic libraries copied (if any)"
 
       # ---- 4. Создаём .app структуру ----
       - name: Create app bundle
         run: |
           APP_DIR=Payload/HikkaWrapper.app
-          mkdir -p $APP_DIR/Frameworks $APP_DIR/pythonlib $APP_DIR/Resources
-          cp -R HikkaWrapper/Resources/Python.framework $APP_DIR/Frameworks/
-          cp -R HikkaWrapper/Resources/pythonlib/* $APP_DIR/pythonlib/
+          mkdir -p "$APP_DIR/Frameworks" "$APP_DIR/pythonlib" "$APP_DIR/Resources"
+          cp -R HikkaWrapper/Resources/Python.framework "$APP_DIR/Frameworks/"
+          cp -R HikkaWrapper/Resources/pythonlib/* "$APP_DIR/pythonlib/"
 
           # Info.plist
-          cat > $APP_DIR/Info.plist <<EOF
+          cat > "$APP_DIR/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -90,21 +141,18 @@ jobs:
           </plist>
           EOF
 
-          # Исполняемый файл-заглушка (можно заменить на реальный бинарник)
-          cat > $APP_DIR/HikkaWrapper <<'EOF'
+          # Исполняемый файл-заглушка
+          cat > "$APP_DIR/HikkaWrapper" <<'EOF'
           #!/bin/bash
           echo "========================================="
           echo "  Hikka Wrapper for iOS"
           echo "  Python userbot ready"
           echo "========================================="
-          # Здесь можно запустить Python с помощью PythonKit,
-          # но для демонстрации оставляем заглушку
           EOF
-          chmod +x $APP_DIR/HikkaWrapper
+          chmod +x "$APP_DIR/HikkaWrapper"
 
-          # Проверка структуры
-          echo "✅ App bundle created:"
-          ls -la $APP_DIR
+          echo "✅ App bundle created"
+          ls -la "$APP_DIR"
 
       # ---- 5. Упаковываем в IPA ----
       - name: Package IPA
@@ -114,7 +162,7 @@ jobs:
           cd ..
           ls -lh HikkaWrapper.ipa
 
-      # ---- 6. Загружаем артефакт (для ручного скачивания) ----
+      # ---- 6. Загружаем артефакт ----
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
@@ -122,7 +170,7 @@ jobs:
           path: HikkaWrapper.ipa
           retention-days: 7
 
-      # ---- 7. Создаём Release и прикрепляем IPA ----
+      # ---- 7. Создаём Release ----
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
