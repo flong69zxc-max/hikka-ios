@@ -44,80 +44,53 @@ jobs:
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b4/Python-3.10-iOS-support.b4.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
 
-          echo "=== Contents of extracted archive ==="
-          ls -la
-          echo "=== Searching for Python.xcframework ==="
-          find . -name "*.xcframework" -type d
-          echo "=== Searching for python-stdlib ==="
-          find . -name "python-stdlib" -type d
-          echo "=== Contents of python-stdlib ==="
-          ls -la python-stdlib/ || echo "python-stdlib not found"
-
-          # Создаём папки
           mkdir -p HikkaWrapper/Resources/Python.framework
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
 
-          # ---- Копируем Python.xcframework ----
+          # Копируем Python.xcframework
           if [ -d "Python.xcframework" ]; then
-            echo "📦 Found Python.xcframework"
             if [ -d "Python.xcframework/ios-arm64" ]; then
               cp -R Python.xcframework/ios-arm64/* HikkaWrapper/Resources/Python.framework/
-              echo "✅ Copied ios-arm64 contents"
             else
               cp -R Python.xcframework/* HikkaWrapper/Resources/Python.framework/
-              echo "✅ Copied entire xcframework"
             fi
           else
             echo "❌ Python.xcframework not found!"
             exit 1
           fi
 
-          # ---- Копируем python-stdlib (ПРАВИЛЬНО) ----
+          # Копируем python-stdlib
           if [ -d "python-stdlib" ]; then
-            echo "📦 Found python-stdlib"
-            # Проверяем структуру python-stdlib
             if [ -d "python-stdlib/lib" ]; then
-              # Копируем всё содержимое lib
               cp -R python-stdlib/lib/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-              echo "✅ Copied python-stdlib/lib/*"
             elif [ -d "python-stdlib/python3.10" ]; then
               cp -R python-stdlib/python3.10/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-              echo "✅ Copied python-stdlib/python3.10/*"
             else
-              # Копируем всё содержимое python-stdlib
               cp -R python-stdlib/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-              echo "✅ Copied entire python-stdlib"
             fi
           else
             echo "❌ python-stdlib not found!"
             exit 1
           fi
 
-          # ---- Копируем динамические библиотеки ----
-          echo "=== Searching for .dylib files ==="
-          find . -name "*.dylib" -type f
+          # Копируем .dylib
           find . -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
-          echo "✅ Dynamic libraries copied"
 
-          # ---- Проверяем результат ----
-          echo "=== Python.framework contents ==="
-          ls -la HikkaWrapper/Resources/Python.framework/ | head -20
-          echo "=== Python stdlib contents ==="
-          ls -la HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/ | head -20
-          echo "=== lib-dynload contents ==="
-          ls -la HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ | head -20
-
-      # ---- 4. Создаём .app структуру ----
-      - name: Create app bundle
+      # ---- 4. Создаём .app с правильной структурой для IPA ----
+      - name: Create .app bundle
         run: |
-          APP_DIR=Payload/HikkaWrapper.app
-          mkdir -p "$APP_DIR/Frameworks" "$APP_DIR/pythonlib" "$APP_DIR/Resources"
-          cp -R HikkaWrapper/Resources/Python.framework "$APP_DIR/Frameworks/"
-          cp -R HikkaWrapper/Resources/pythonlib/* "$APP_DIR/pythonlib/"
+          # Создаём папку .app
+          mkdir -p Payload/HikkaWrapper.app/Frameworks
+          mkdir -p Payload/HikkaWrapper.app/pythonlib
+          mkdir -p Payload/HikkaWrapper.app/Resources
+
+          # Копируем ресурсы
+          cp -R HikkaWrapper/Resources/Python.framework Payload/HikkaWrapper.app/Frameworks/
+          cp -R HikkaWrapper/Resources/pythonlib/* Payload/HikkaWrapper.app/pythonlib/
 
           # Info.plist
-          cat > "$APP_DIR/Info.plist" <<EOF
+          cat > Payload/HikkaWrapper.app/Info.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -150,27 +123,30 @@ jobs:
           EOF
 
           # Исполняемый файл
-          cat > "$APP_DIR/HikkaWrapper" <<'EOF'
+          cat > Payload/HikkaWrapper.app/HikkaWrapper <<'EOF'
           #!/bin/bash
           echo "========================================="
           echo "  Hikka Wrapper for iOS"
           echo "  Python userbot ready"
           echo "========================================="
           EOF
-          chmod +x "$APP_DIR/HikkaWrapper"
+          chmod +x Payload/HikkaWrapper.app/HikkaWrapper
 
-          echo "✅ App bundle created"
-          ls -la "$APP_DIR"
+          echo "✅ .app bundle created at Payload/HikkaWrapper.app"
 
-      # ---- 5. Упаковываем в IPA ----
+      # ---- 5. Упаковываем в ПРАВИЛЬНЫЙ .ipa ----
       - name: Package IPA
         run: |
+          # Создаём IPA из папки Payload (стандартная структура)
           cd Payload
           zip -r ../HikkaWrapper.ipa .
           cd ..
+          # Проверяем, что файл создался
           ls -lh HikkaWrapper.ipa
+          # Проверяем структуру IPA
+          unzip -l HikkaWrapper.ipa | head -20
 
-      # ---- 6. Загружаем артефакт ----
+      # ---- 6. Загружаем артефакт (для ручного скачивания) ----
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
@@ -178,7 +154,7 @@ jobs:
           path: HikkaWrapper.ipa
           retention-days: 7
 
-      # ---- 7. Создаём Release ----
+      # ---- 7. Создаём Release и прикрепляем IPA ----
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
