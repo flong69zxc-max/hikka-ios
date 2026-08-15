@@ -21,18 +21,25 @@ jobs:
           rm -rf HikkaWrapper Payload Sources python_ios.tar.gz *.ipa
           echo "🧹 Cleaned old files"
 
-      # ---- 1. Получаем Hikka ----
+      # ---- 1. Получаем Hikka (с повторными попытками) ----
       - name: Clone Hikka
         run: |
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/site-packages
           cd HikkaWrapper/Resources/pythonlib/python310/site-packages
-          git clone https://github.com/hikariatama/hikka.git || true
-          if [ ! -d hikka ]; then
-            curl -L https://github.com/hikariatama/hikka/archive/main.zip -o hikka.zip
-            unzip -q hikka.zip
-            mv hikka-main hikka
-            rm hikka.zip
-          fi
+          # Пытаемся клонировать, если не выйдет – скачиваем архив
+          for i in {1..3}; do
+            if git clone https://github.com/hikariatama/hikka.git; then
+              break
+            elif [ $i -eq 3 ]; then
+              curl -L https://github.com/hikariatama/hikka/archive/main.zip -o hikka.zip
+              unzip -q hikka.zip
+              mv hikka-main hikka
+              rm hikka.zip
+              break
+            else
+              sleep 2
+            fi
+          done
 
       # ---- 2. Установка Python и зависимостей ----
       - name: Setup Python
@@ -42,12 +49,13 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install telethon yarl aiohttp cryptography pillow -t HikkaWrapper/Resources/pythonlib/python310/site-packages/
+          pip install --upgrade pip
+          pip install telethon yarl aiohttp cryptography pillow --no-cache-dir -t HikkaWrapper/Resources/pythonlib/python310/site-packages/
           if [ -f HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt ]; then
-            pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
+            pip install --no-cache-dir -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python.framework (исправлено окончательно) ----
+      # ---- 3. Скачиваем Python.framework (без конфликтов копирования) ----
       - name: Download Python framework
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
@@ -68,15 +76,28 @@ jobs:
             else
               cp -R "$XCFRAMEWORK_PATH/ios-arm64"/* HikkaWrapper/Resources/Python.framework/
             fi
+          else
+            echo "⚠️ Python.xcframework not found, checking fallback..."
+            # fallback: ищем любую папку с Python.framework
+            FRAMEWORK_PATH=$(find . -name "Python.framework" -type d | head -1)
+            if [ -n "$FRAMEWORK_PATH" ]; then
+              cp -R "$FRAMEWORK_PATH"/* HikkaWrapper/Resources/Python.framework/
+            fi
           fi
 
-          # Копируем стандартную библиотеку целиком из распакованного архива
+          # Копируем стандартную библиотеку (ищем наиболее полную)
           STDLIB_SOURCE=$(find . -path "*/lib/python3.10" -type d | head -1)
           if [ -n "$STDLIB_SOURCE" ]; then
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/
+          else
+            # альтернативный поиск
+            STDLIB_SOURCE=$(find . -name "os.py" -exec dirname {} \; | head -1)
+            if [ -n "$STDLIB_SOURCE" ]; then
+              cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/
+            fi
           fi
 
-          # Копируем все .dylib (если они где-то ещё) прямо в lib, без lib-dynload
+          # Копируем все .dylib прямо в lib (без lib-dynload, чтобы избежать конфликтов)
           find . -name "*.dylib" -exec cp -f {} HikkaWrapper/Resources/pythonlib/python310/lib/ \; 2>/dev/null || true
 
           echo "✅ Python resources prepared"
@@ -142,7 +163,7 @@ jobs:
           }
           EOF
 
-      # ---- 5. Компилируем в бинарник для iOS ----
+      # ---- 5. Компилируем в бинарник для iOS (с ключами для библиотек) ----
       - name: Compile Swift
         run: |
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -152,6 +173,7 @@ jobs:
             -sdk "$SDK_PATH" \
             -target arm64-apple-ios14.0 \
             -O \
+            -parse-as-library \
             -framework Foundation \
             -framework UIKit \
             -framework SwiftUI
@@ -222,18 +244,24 @@ jobs:
           zip -r HikkaWrapper.ipa Payload
           ls -lh HikkaWrapper.ipa
 
-      # ---- 8. Удаляем предыдущий релиз и тег (если есть) ----
+      # ---- 8. Удаляем предыдущий релиз и тег (с гарантией) ----
       - name: Delete previous release and tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v${{ github.run_number }}"
+          # Проверяем наличие релиза и удаляем
           if gh release view "$TAG" &>/dev/null; then
             echo "Deleting existing release $TAG"
             gh release delete "$TAG" --yes
           fi
+          # Проверяем наличие тега локально и на удалённом
           if git rev-parse "$TAG" &>/dev/null; then
-            echo "Deleting existing tag $TAG"
+            echo "Deleting local tag $TAG"
+            git tag -d "$TAG"
+          fi
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "Deleting remote tag $TAG"
             git push --delete origin "$TAG" || true
           fi
 
