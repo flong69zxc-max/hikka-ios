@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write          # даём права на создание релизов
+
 jobs:
   build:
     runs-on: macos-latest
@@ -42,40 +45,43 @@ jobs:
       - name: Download Python framework
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b4/Python-3.10-iOS-support.b4.tar.gz -o python_ios.tar.gz
-          tar -xzf python_ios.tar.gz
-
-          mkdir -p HikkaWrapper/Resources/Python.framework
-          mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
-          mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
-
-          # Копируем Python.xcframework
-          if [ -d "Python.xcframework" ]; then
-            if [ -d "Python.xcframework/ios-arm64" ]; then
-              cp -R Python.xcframework/ios-arm64/* HikkaWrapper/Resources/Python.framework/
-            else
-              cp -R Python.xcframework/* HikkaWrapper/Resources/Python.framework/
-            fi
-          else
-            echo "❌ Python.xcframework not found!"
+          mkdir -p python_ios_extracted
+          tar -xzf python_ios.tar.gz -C python_ios_extracted
+          EXTRACT_DIR=$(find python_ios_extracted -maxdepth 1 -type d -name "Python-*" | head -1)
+          if [ -z "$EXTRACT_DIR" ]; then
+            echo "❌ Could not find extracted directory"
             exit 1
           fi
+          echo "Extracted directory: $EXTRACT_DIR"
+          cd "$EXTRACT_DIR"
 
-          # Копируем python-stdlib
-          if [ -d "python-stdlib" ]; then
-            if [ -d "python-stdlib/lib" ]; then
-              cp -R python-stdlib/lib/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-            elif [ -d "python-stdlib/python3.10" ]; then
-              cp -R python-stdlib/python3.10/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-            else
-              cp -R python-stdlib/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-            fi
+          # Создаём необходимые директории в workspace
+          mkdir -p $GITHUB_WORKSPACE/HikkaWrapper/Resources
+          mkdir -p $GITHUB_WORKSPACE/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
+          mkdir -p $GITHUB_WORKSPACE/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
+
+          # Копируем Python.framework
+          if [ -d "Python.xcframework/ios-arm64/Python.framework" ]; then
+            cp -R Python.xcframework/ios-arm64/Python.framework $GITHUB_WORKSPACE/HikkaWrapper/Resources/
+          else
+            mkdir -p $GITHUB_WORKSPACE/HikkaWrapper/Resources/Python.framework
+            cp -R Python.xcframework/ios-arm64/* $GITHUB_WORKSPACE/HikkaWrapper/Resources/Python.framework/
+          fi
+
+          # Копируем стандартную библиотеку
+          if [ -d "python-stdlib/lib" ]; then
+            cp -R python-stdlib/lib/* $GITHUB_WORKSPACE/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+          elif [ -d "python-stdlib/python3.10" ]; then
+            cp -R python-stdlib/python3.10/* $GITHUB_WORKSPACE/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+          elif [ -d "python-stdlib" ]; then
+            cp -R python-stdlib/* $GITHUB_WORKSPACE/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
           else
             echo "❌ python-stdlib not found!"
             exit 1
           fi
 
-          # Копируем .dylib
-          find . -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
+          # Копируем динамические библиотеки (исключая фреймворк)
+          find . -name "*.dylib" -not -path "*/Python.framework/*" -exec cp {} $GITHUB_WORKSPACE/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
 
       # ---- 4. Создаём .app с правильной структурой для IPA ----
       - name: Create .app bundle
@@ -90,7 +96,7 @@ jobs:
           cp -R HikkaWrapper/Resources/pythonlib/* Payload/HikkaWrapper.app/pythonlib/
 
           # Info.plist
-          cat > Payload/HikkaWrapper.app/Info.plist <<EOF
+          cat > Payload/HikkaWrapper.app/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -122,7 +128,7 @@ jobs:
           </plist>
           EOF
 
-          # Исполняемый файл
+          # Исполняемый файл (заглушка)
           cat > Payload/HikkaWrapper.app/HikkaWrapper <<'EOF'
           #!/bin/bash
           echo "========================================="
@@ -133,20 +139,18 @@ jobs:
           chmod +x Payload/HikkaWrapper.app/HikkaWrapper
 
           echo "✅ .app bundle created at Payload/HikkaWrapper.app"
+          ls -la Payload/
 
       # ---- 5. Упаковываем в ПРАВИЛЬНЫЙ .ipa ----
       - name: Package IPA
         run: |
-          # Создаём IPA из папки Payload (стандартная структура)
-          cd Payload
-          zip -r ../HikkaWrapper.ipa .
-          cd ..
-          # Проверяем, что файл создался
+          # Создаём IPA с папкой Payload в корне
+          zip -r HikkaWrapper.ipa Payload
           ls -lh HikkaWrapper.ipa
-          # Проверяем структуру IPA
+          echo "=== Проверяем структуру IPA ==="
           unzip -l HikkaWrapper.ipa | head -20
 
-      # ---- 6. Загружаем артефакт (для ручного скачивания) ----
+      # ---- 6. Загружаем артефакт ----
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
@@ -154,14 +158,15 @@ jobs:
           path: HikkaWrapper.ipa
           retention-days: 7
 
-      # ---- 7. Создаём Release и прикрепляем IPA ----
+      # ---- 7. Создаём Release ----
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: v${{ github.run_number }}
+          tag: v${{ github.run_number }}
           name: "Build #${{ github.run_number }}"
           draft: false
           prerelease: true
-          files: HikkaWrapper.ipa
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: "HikkaWrapper.ipa"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
+          replacesArtifacts: true
