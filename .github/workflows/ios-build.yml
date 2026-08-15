@@ -15,41 +15,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Клонируем Hikka (правильный путь)
+      # 2. Клонируем Hikka
       - name: Clone Hikka repository
         run: |
           mkdir -p HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages
           cd HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages
           
-          # Клонируем через HTTPS (публичный репозиторий)
           echo "🔄 Cloning hikariatama/hikka..."
-          git clone https://github.com/hikariatama/hikka.git || \
-          echo "⚠️ Git clone failed, trying alternative method..."
+          git clone https://github.com/hikariatama/hikka.git || echo "⚠️ Git clone failed"
           
-          # Если клонирование не удалось, скачиваем ZIP
           if [ ! -d "hikka" ]; then
             echo "📥 Downloading Hikka as ZIP..."
             curl -L https://github.com/hikariatama/hikka/archive/refs/heads/main.zip -o hikka.zip
-            if [ -f "hikka.zip" ]; then
-              unzip -q hikka.zip
-              mv hikka-main hikka 2>/dev/null || mv hikka-* hikka 2>/dev/null || true
-              rm hikka.zip
-              echo "✅ Hikka downloaded from ZIP"
-            fi
-          else
-            echo "✅ Hikka cloned successfully"
+            unzip -q hikka.zip
+            mv hikka-main hikka 2>/dev/null || true
+            rm hikka.zip
           fi
           
-          # Проверяем наличие
           if [ -d "hikka" ]; then
             echo "✅ Hikka directory exists"
-            ls -la hikka/
+            ls -la hikka/ | head -20
           else
-            echo "❌ Hikka not found!"
-            # Создаём заглушку
+            echo "❌ Hikka not found, creating placeholder"
             mkdir -p hikka
             echo "# Hikka placeholder" > hikka/__init__.py
-            echo "def main(): print('Hikka placeholder')" > hikka/__main__.py
+            echo "def main():" > hikka/__main__.py
+            echo "    print('Hikka userbot running...')" >> hikka/__main__.py
           fi
 
       # 3. Устанавливаем Python
@@ -63,74 +54,63 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           
-          # Создаём папку site-packages
           mkdir -p HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages
           
-          # Устанавливаем зависимости для Hikka
           echo "📦 Installing dependencies..."
           pip install telethon yarl aiohttp cryptography pillow -t HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/
           
-          # Если есть requirements.txt, устанавливаем оттуда
           if [ -f "HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt" ]; then
-            echo "📦 Installing from requirements.txt..."
             pip install -r HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
           
           echo "✅ Dependencies installed"
-          ls -la HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/
+          ls HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/ | head -20
 
-      # 5. Скачиваем Python.framework для iOS
+      # 5. Скачиваем Python.framework
       - name: Download Python framework
         run: |
-          echo "📥 Downloading Python framework for iOS..."
+          echo "📥 Downloading Python framework..."
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b4/Python-3.10-iOS-support.b4.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
           
-          # Создаём структуру папок
           mkdir -p HikkaWrapper/HikkaWrapper/Resources/Python.framework
           mkdir -p HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
           
-          # Копируем Python.framework
           if [ -d "Python/Resources/Python.framework" ]; then
             cp -R Python/Resources/Python.framework/* HikkaWrapper/HikkaWrapper/Resources/Python.framework/
             echo "✅ Python.framework copied"
           fi
           
-          # Копируем стандартную библиотеку
           if [ -d "Python/Resources/python-stdlib/lib/python3.10" ]; then
             cp -R Python/Resources/python-stdlib/lib/python3.10/* HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
             echo "✅ Python stdlib copied"
           fi
           
-          # Копируем динамические библиотеки
           if [ -d "Python/Resources/lib" ]; then
             find Python/Resources/lib -name "*.dylib" -exec cp {} HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
             echo "✅ Dynamic libraries copied"
           fi
-          
-          # Проверяем результат
-          echo "📂 Python framework size:"
-          du -sh HikkaWrapper/HikkaWrapper/Resources/Python.framework/ || echo "⚠️ Python.framework not found"
-          echo "📂 Python lib size:"
-          du -sh HikkaWrapper/HikkaWrapper/Resources/pythonlib/ || echo "⚠️ pythonlib not found"
 
-      # 6. Создаём Xcode проект
-      - name: Create Xcode project
+      # 6. Создаём структуру .app
+      - name: Create app bundle
         run: |
           # Создаём папки
-          mkdir -p HikkaWrapper.xcodeproj
           mkdir -p Payload/HikkaWrapper.app/Frameworks
+          mkdir -p Payload/HikkaWrapper.app/pythonlib
           mkdir -p Payload/HikkaWrapper.app/Resources
           
-          # Копируем Swift файлы
-          cp -r HikkaWrapper/* Payload/HikkaWrapper.app/ 2>/dev/null || true
+          # Копируем Python.framework
+          if [ -d "HikkaWrapper/HikkaWrapper/Resources/Python.framework" ]; then
+            cp -R HikkaWrapper/HikkaWrapper/Resources/Python.framework Payload/HikkaWrapper.app/Frameworks/
+            echo "✅ Python.framework copied to app"
+          fi
           
-          # Копируем Python.framework в .app
-          cp -r HikkaWrapper/HikkaWrapper/Resources/Python.framework Payload/HikkaWrapper.app/Frameworks/ 2>/dev/null || true
-          
-          # Копируем pythonlib в .app
-          cp -r HikkaWrapper/HikkaWrapper/Resources/pythonlib Payload/HikkaWrapper.app/ 2>/dev/null || true
+          # Копируем pythonlib
+          if [ -d "HikkaWrapper/HikkaWrapper/Resources/pythonlib" ]; then
+            cp -R HikkaWrapper/HikkaWrapper/Resources/pythonlib/* Payload/HikkaWrapper.app/pythonlib/
+            echo "✅ pythonlib copied to app"
+          fi
           
           # Создаём Info.plist
           cat > Payload/HikkaWrapper.app/Info.plist << 'EOF'
@@ -169,21 +149,20 @@ jobs:
                   <key>NSAllowsArbitraryLoads</key>
                   <true/>
               </dict>
-              <key>UIFileSharingEnabled</key>
-              <true/>
           </dict>
           </plist>
           EOF
           
-          # Создаём исполняемый файл (заглушка)
+          # Создаём исполняемый файл
           cat > Payload/HikkaWrapper.app/HikkaWrapper << 'EOF'
           #!/bin/bash
           echo "Hikka Wrapper for iOS"
-          echo "Python userbot running..."
+          echo "Starting Python userbot..."
           EOF
           chmod +x Payload/HikkaWrapper.app/HikkaWrapper
           
-          echo "✅ App structure created"
+          # Проверяем структуру
+          echo "📂 App bundle structure:"
           ls -la Payload/HikkaWrapper.app/
 
       # 7. Создаём IPA
@@ -193,9 +172,8 @@ jobs:
           zip -r ../HikkaWrapper.ipa .
           cd ..
           
-          # Проверяем размер
+          echo "✅ IPA created"
           ls -lh HikkaWrapper.ipa
-          file HikkaWrapper.ipa
 
       # 8. Загружаем артефакт
       - name: Upload IPA
