@@ -41,79 +41,49 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python для iOS (гибкий поиск) ----
+      # ---- 3. Скачиваем Python 3.10-b4 (с правильной структурой) ----
       - name: Download Python framework
         run: |
-          # Скачиваем последний стабильный релиз Python 3.10 для iOS
-          curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b10/Python-3.10-iOS-support.b10.tar.gz -o python_ios.tar.gz
+          # Используем версию 3.10-b4, где есть отдельные папки Python.framework и python-stdlib
+          curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b4/Python-3.10-iOS-support.b4.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
 
-          # Отладочный вывод структуры
+          # Проверяем структуру
           echo "=== Содержимое после распаковки ==="
           ls -la
-          echo "=== Поиск python-stdlib ==="
-          find . -type d -name "python-stdlib"
-          echo "=== Поиск Python.framework ==="
-          find . -type d -name "Python.framework"
+          echo "=== Содержимое Python/Resources ==="
+          ls -la Python/Resources/ || echo "Python/Resources не найдена"
 
-          # Создаём целевые папки
           mkdir -p HikkaWrapper/Resources/Python.framework
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
 
-          # ---- Копируем Python.framework ----
-          if [ -d "Python.xcframework/ios-arm64/Python.framework" ]; then
-            cp -R Python.xcframework/ios-arm64/Python.framework/* HikkaWrapper/Resources/Python.framework/
-          elif [ -d "Python.xcframework/ios-arm64_armv7/Python.framework" ]; then
-            cp -R Python.xcframework/ios-arm64_armv7/Python.framework/* HikkaWrapper/Resources/Python.framework/
+          # Копируем Python.framework
+          if [ -d "Python/Resources/Python.framework" ]; then
+            cp -R Python/Resources/Python.framework/* HikkaWrapper/Resources/Python.framework/
           else
-            FRAMEWORK_PATH=$(find . -name "Python.framework" -type d | head -1)
-            if [ -n "$FRAMEWORK_PATH" ]; then
-              cp -R "$FRAMEWORK_PATH"/* HikkaWrapper/Resources/Python.framework/
-            else
-              echo "❌ Python.framework не найден!"
-              exit 1
-            fi
+            echo "❌ Python.framework не найден!"
+            exit 1
           fi
 
-          # ---- Копируем python-stdlib (гибко) ----
-          STDLIB_DIR=""
-          if [ -d "python-stdlib/lib" ]; then
-            STDLIB_DIR="python-stdlib/lib"
-          elif [ -d "python-stdlib/python3.10" ]; then
-            STDLIB_DIR="python-stdlib/python3.10"
-          elif [ -d "python-stdlib" ]; then
-            STDLIB_DIR="python-stdlib"
+          # Копируем python-stdlib
+          if [ -d "Python/Resources/python-stdlib/lib" ]; then
+            cp -R Python/Resources/python-stdlib/lib/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+          elif [ -d "Python/Resources/python-stdlib" ]; then
+            cp -R Python/Resources/python-stdlib/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
           else
-            # Ищем через find
-            STDLIB_PATH=$(find . -type d -name "python-stdlib" | head -1)
-            if [ -n "$STDLIB_PATH" ]; then
-              STDLIB_DIR="$STDLIB_PATH"
-            else
-              # Возможно, стандартная библиотека внутри другой папки
-              LIB_PATH=$(find . -type d -path "*/lib/python3.10" | head -1)
-              if [ -n "$LIB_PATH" ]; then
-                STDLIB_DIR="$LIB_PATH"
-              else
-                echo "❌ python-stdlib не найден!"
-                exit 1
-              fi
-            fi
+            echo "❌ python-stdlib не найден!"
+            exit 1
           fi
 
-          echo "Копируем из $STDLIB_DIR в HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/"
-          cp -R "$STDLIB_DIR"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+          # Копируем .dylib
+          find Python -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
 
-          # ---- Копируем .dylib ----
-          find . -name "*.dylib" -not -path "*/Python.framework/*" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
-
-          # Проверка результата
-          echo "=== Проверка скопированных файлов ==="
+          # Проверка
+          echo "=== Проверка Python.framework ==="
           ls -la HikkaWrapper/Resources/Python.framework/ | head -10
-          echo "=== Содержимое pythonlib/python310/lib/python3.10 ==="
+          echo "=== Проверка stdlib ==="
           ls -la HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/ | head -10
-          echo "=== Содержимое lib-dynload ==="
-          ls -la HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ | head -10
 
       # ---- 4. Создаём .app ----
       - name: Create .app bundle
