@@ -41,7 +41,7 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python.framework (ГАРАНТИРОВАННО БЕЗ ОШИБОК) ----
+      # ---- 3. Скачиваем Python.framework (исправлено) ----
       - name: Download Python framework
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
@@ -67,11 +67,10 @@ jobs:
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
           fi
 
-          # ГАРАНТИРОВАННОЕ РЕШЕНИЕ для .dylib (через временную папку)
-          mkdir -p temp_dylib
-          find ./Python.xcframework -name "*.dylib" -exec cp {} temp_dylib/ \; 2>/dev/null || true
-          cp -R temp_dylib/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ 2>/dev/null || true
-          rm -rf temp_dylib
+          # Копируем .dylib напрямую (без временной папки)
+          if [ -d "Python.xcframework" ]; then
+            find ./Python.xcframework -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
+          fi
 
           echo "✅ Python resources prepared"
 
