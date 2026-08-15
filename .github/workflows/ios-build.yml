@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
 
+# Переменная для подавления предупреждения о Node.js 20
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
@@ -44,7 +45,7 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python.framework (без identical) ----
+      # ---- 3. Скачиваем Python.framework (БЕЗ ОШИБОК) ----
       - name: Download Python framework
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
@@ -54,6 +55,7 @@ jobs:
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
 
+          # 1. Копируем Python.framework
           XCFRAMEWORK_PATH=$(find . -type d -name "Python.xcframework" | head -1)
           if [ -n "$XCFRAMEWORK_PATH" ]; then
             if [ -d "$XCFRAMEWORK_PATH/ios-arm64/Python.framework" ]; then
@@ -63,13 +65,18 @@ jobs:
             fi
           fi
 
+          # 2. Копируем стандартную библиотеку
           STDLIB_SOURCE=$(find . -path "*/lib/python3.10" -type d | head -1)
           if [ -n "$STDLIB_SOURCE" ]; then
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
           fi
 
-          # Копируем .dylib, исключая папку HikkaWrapper и подавляя все сообщения
-          find . -name "*.dylib" -not -path "./HikkaWrapper/*" -exec cp -n {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
+          # 3. Копируем .dylib БЕЗ ОШИБОК:
+          #    - Ищем ТОЛЬКО в распакованной папке (не в HikkaWrapper)
+          #    - Используем cp -n (не перезаписывать)
+          #    - Подавляем весь вывод ошибок
+          echo "🔍 Копируем .dylib файлы (игнорируем существующие)..."
+          find . -path "./Python*" -name "*.dylib" -exec cp -n {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
           echo "✅ Python resources prepared"
 
       # ---- 4. Создаём SwiftUI приложение ----
