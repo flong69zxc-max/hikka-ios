@@ -15,6 +15,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ---- 0. Очистка от предыдущих сборок ----
+      - name: Clean previous build artifacts
+        run: |
+          rm -rf HikkaWrapper Payload Sources python_ios.tar.gz *.ipa
+          echo "🧹 Cleaned old files"
+
       # ---- 1. Получаем Hikka ----
       - name: Clone Hikka
         run: |
@@ -41,12 +47,15 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python.framework (исправлено) ----
+      # ---- 3. Скачиваем Python.framework (с очисткой и принудительным копированием) ----
       - name: Download Python framework
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
 
+          # Удаляем старые ресурсы, чтобы избежать конфликтов
+          rm -rf HikkaWrapper/Resources/Python.framework
+          rm -rf HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/Resources/Python.framework
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
@@ -67,9 +76,9 @@ jobs:
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
           fi
 
-          # Копируем .dylib напрямую (без временной папки)
+          # Копируем .dylib с принудительной перезаписью и игнорированием ошибок
           if [ -d "Python.xcframework" ]; then
-            find ./Python.xcframework -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
+            find ./Python.xcframework -name "*.dylib" -exec cp -f {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
           fi
 
           echo "✅ Python resources prepared"
@@ -215,15 +224,24 @@ jobs:
           zip -r HikkaWrapper.ipa Payload
           ls -lh HikkaWrapper.ipa
 
-      # ---- 8. Артефакт ----
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: HikkaWrapper-unsigned
-          path: HikkaWrapper.ipa
-          retention-days: 7
+      # ---- 8. Удаляем предыдущий релиз и тег (если есть) ----
+      - name: Delete previous release and tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ github.run_number }}"
+          # Проверяем, существует ли релиз с таким тегом
+          if gh release view "$TAG" &>/dev/null; then
+            echo "Deleting existing release $TAG"
+            gh release delete "$TAG" --yes
+          fi
+          # Удаляем тег, если он существует
+          if git rev-parse "$TAG" &>/dev/null; then
+            echo "Deleting existing tag $TAG"
+            git push --delete origin "$TAG" || true
+          fi
 
-      # ---- 9. Релиз ----
+      # ---- 9. Создаём новый релиз ----
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
@@ -235,3 +253,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
           replacesArtifacts: true
+
+      # ---- 10. Артефакт (опционально, дублируется в релизе) ----
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HikkaWrapper-unsigned
+          path: HikkaWrapper.ipa
+          retention-days: 7
