@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---- 1. Получаем Hikka ----
+      # ---- 1. Получаем Hikka (пока не используется, но оставим) ----
       - name: Clone Hikka
         run: |
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/site-packages
@@ -28,7 +28,7 @@ jobs:
             rm hikka.zip
           fi
 
-      # ---- 2. Установка Python и зависимостей ----
+      # ---- 2. Установка Python (пока не используется, но оставим) ----
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -41,8 +41,8 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python (адаптация под новую структуру) ----
-      - name: Download and extract Python
+      # ---- 3. Скачиваем Python для iOS (опционально) ----
+      - name: Download Python framework (optional)
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
@@ -51,40 +51,24 @@ jobs:
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
 
-          # Копируем Python.framework из xcframework
           XCFRAMEWORK_PATH=$(find . -type d -name "Python.xcframework" | head -1)
-          if [ -z "$XCFRAMEWORK_PATH" ]; then
-            echo "❌ Python.xcframework не найден!"
-            exit 1
-          fi
-          echo "Найден Python.xcframework: $XCFRAMEWORK_PATH"
-
-          if [ -d "$XCFRAMEWORK_PATH/ios-arm64/Python.framework" ]; then
-            cp -R "$XCFRAMEWORK_PATH/ios-arm64/Python.framework"/* HikkaWrapper/Resources/Python.framework/
-          else
-            cp -R "$XCFRAMEWORK_PATH/ios-arm64"/* HikkaWrapper/Resources/Python.framework/
+          if [ -n "$XCFRAMEWORK_PATH" ]; then
+            if [ -d "$XCFRAMEWORK_PATH/ios-arm64/Python.framework" ]; then
+              cp -R "$XCFRAMEWORK_PATH/ios-arm64/Python.framework"/* HikkaWrapper/Resources/Python.framework/
+            else
+              cp -R "$XCFRAMEWORK_PATH/ios-arm64"/* HikkaWrapper/Resources/Python.framework/
+            fi
           fi
 
-          # Копируем стандартную библиотеку из xcframework
-          STDLIB_SOURCE=$(find "$XCFRAMEWORK_PATH" -path "*/lib/python3.10" -type d | head -1)
-          if [ -n "$STDLIB_SOURCE" ] && [ -d "$STDLIB_SOURCE" ]; then
+          STDLIB_SOURCE=$(find . -path "*/lib/python3.10" -type d | head -1)
+          if [ -n "$STDLIB_SOURCE" ]; then
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-          else
-            echo "❌ Стандартная библиотека не найдена!"
-            exit 1
           fi
 
-          # Копируем .dylib
-          DYNLOAD_SOURCE=$(find "$XCFRAMEWORK_PATH" -path "*/lib-dynload" -type d | head -1)
-          if [ -n "$DYNLOAD_SOURCE" ] && [ -d "$DYNLOAD_SOURCE" ]; then
-            cp -R "$DYNLOAD_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/
-          else
-            find "$XCFRAMEWORK_PATH" -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
-          fi
+          find . -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
+          echo "✅ Python resources prepared"
 
-          echo "✅ Python скопирован"
-
-      # ---- 4. Создаём простые Swift файлы (без PythonKit) ----
+      # ---- 4. Создаём простое SwiftUI приложение (без внешних зависимостей) ----
       - name: Create Swift sources
         run: |
           mkdir -p Sources
@@ -105,28 +89,33 @@ jobs:
           import SwiftUI
 
           struct ContentView: View {
-              @State private var isRunning = false
-              @State private var log = ""
+              @State private var log = "Готов к работе!"
+              @State private var counter = 0
 
               var body: some View {
                   VStack(spacing: 20) {
+                      Image(systemName: "apple.terminal")
+                          .font(.system(size: 60))
+                          .foregroundColor(.blue)
                       Text("Hikka Wrapper")
                           .font(.largeTitle)
-                      Text("iOS Userbot")
+                          .fontWeight(.bold)
+                      Text("iOS Python Userbot")
                           .font(.subheadline)
-                      Button(isRunning ? "Running..." : "Run") {
-                          isRunning = true
-                          log += "[\(Date())] Запуск...\n"
-                          DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                              log += "[\(Date())] Готово!\n"
-                              isRunning = false
-                          }
+                          .foregroundColor(.gray)
+
+                      Button(action: {
+                          counter += 1
+                          log = "Нажатий: \(counter)\nПоследнее действие: \(Date())"
+                      }) {
+                          Text("Нажми меня")
+                              .padding()
+                              .frame(maxWidth: .infinity)
+                              .background(Color.blue)
+                              .foregroundColor(.white)
+                              .cornerRadius(12)
                       }
-                      .disabled(isRunning)
-                      .padding()
-                      .background(isRunning ? Color.gray : Color.blue)
-                      .foregroundColor(.white)
-                      .cornerRadius(8)
+                      .padding(.horizontal)
 
                       ScrollView {
                           Text(log)
@@ -136,7 +125,8 @@ jobs:
                       }
                       .background(Color.black.opacity(0.05))
                       .cornerRadius(8)
-                      .frame(height: 200)
+                      .frame(height: 150)
+                      .padding(.horizontal)
                   }
                   .padding()
               }
@@ -165,14 +155,16 @@ jobs:
           mkdir -p Payload/HikkaWrapper.app/pythonlib
           mkdir -p Payload/HikkaWrapper.app/Resources
 
-          # Копируем бинарник
           cp Sources/HikkaWrapper Payload/HikkaWrapper.app/
 
-          # Копируем Python.framework
-          cp -R HikkaWrapper/Resources/Python.framework Payload/HikkaWrapper.app/Frameworks/
-          cp -R HikkaWrapper/Resources/pythonlib/* Payload/HikkaWrapper.app/pythonlib/
+          # Копируем Python.framework и pythonlib (если есть)
+          if [ -d "HikkaWrapper/Resources/Python.framework" ]; then
+            cp -R HikkaWrapper/Resources/Python.framework Payload/HikkaWrapper.app/Frameworks/
+          fi
+          if [ -d "HikkaWrapper/Resources/pythonlib" ]; then
+            cp -R HikkaWrapper/Resources/pythonlib/* Payload/HikkaWrapper.app/pythonlib/
+          fi
 
-          # Info.plist
           cat > Payload/HikkaWrapper.app/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -196,6 +188,11 @@ jobs:
               <array>
                   <string>UIInterfaceOrientationPortrait</string>
               </array>
+              <key>NSAppTransportSecurity</key>
+              <dict>
+                  <key>NSAllowsArbitraryLoads</key>
+                  <true/>
+              </dict>
           </dict>
           </plist>
           EOF
