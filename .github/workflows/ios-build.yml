@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---- 1. Получаем Hikka (пока не используется) ----
+      # ---- 1. Получаем Hikka (оставляем для будущего) ----
       - name: Clone Hikka
         run: |
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/site-packages
@@ -28,7 +28,7 @@ jobs:
             rm hikka.zip
           fi
 
-      # ---- 2. Установка Python (опционально) ----
+      # ---- 2. Установка Python и зависимостей ----
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -41,7 +41,7 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python для iOS ----
+      # ---- 3. Скачиваем Python.framework для iOS ----
       - name: Download Python framework
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
@@ -65,10 +65,11 @@ jobs:
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
           fi
 
-          find . -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
+          # Копируем .dylib, исключая уже созданную папку HikkaWrapper
+          find . -name "*.dylib" -not -path "*/HikkaWrapper/*" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
           echo "✅ Python resources prepared"
 
-      # ---- 4. Создаём простейшее SwiftUI приложение ----
+      # ---- 4. Создаём SwiftUI приложение ----
       - name: Create Swift sources
         run: |
           mkdir -p Sources
@@ -142,9 +143,7 @@ jobs:
             -framework Foundation \
             -framework UIKit \
             -framework SwiftUI
-          file Sources/HikkaWrapper
 
-          # Проверяем, что бинарник создан и является Mach-O
           if [ ! -f Sources/HikkaWrapper ]; then
             echo "❌ Бинарник не создан!"
             exit 1
@@ -153,7 +152,7 @@ jobs:
             echo "❌ Бинарник не является Mach-O!"
             exit 1
           }
-          echo "✅ Бинарник успешно создан и проверен"
+          echo "✅ Бинарник успешно создан"
 
       # ---- 6. Создаём .app ----
       - name: Create .app bundle
@@ -204,14 +203,12 @@ jobs:
           EOF
 
           echo "✅ .app bundle created"
-          ls -la Payload/HikkaWrapper.app/
 
       # ---- 7. Упаковываем в IPA ----
       - name: Package IPA
         run: |
           zip -r HikkaWrapper.ipa Payload
           ls -lh HikkaWrapper.ipa
-          unzip -l HikkaWrapper.ipa | head -20
 
       # ---- 8. Артефакт ----
       - name: Upload IPA artifact
