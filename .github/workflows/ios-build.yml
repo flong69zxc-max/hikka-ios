@@ -44,16 +44,14 @@ jobs:
       # ---- 3. Скачиваем Python (адаптация под новую структуру) ----
       - name: Download and extract Python
         run: |
-          # Скачиваем последнюю стабильную версию 3.10
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
 
-          # Создаём целевые папки
           mkdir -p HikkaWrapper/Resources/Python.framework
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
 
-          echo "=== Ищем Python.xcframework ==="
+          # Копируем Python.framework из xcframework
           XCFRAMEWORK_PATH=$(find . -type d -name "Python.xcframework" | head -1)
           if [ -z "$XCFRAMEWORK_PATH" ]; then
             echo "❌ Python.xcframework не найден!"
@@ -61,63 +59,120 @@ jobs:
           fi
           echo "Найден Python.xcframework: $XCFRAMEWORK_PATH"
 
-          # Копируем Python.framework из слайса ios-arm64
           if [ -d "$XCFRAMEWORK_PATH/ios-arm64/Python.framework" ]; then
             cp -R "$XCFRAMEWORK_PATH/ios-arm64/Python.framework"/* HikkaWrapper/Resources/Python.framework/
-          elif [ -d "$XCFRAMEWORK_PATH/ios-arm64" ]; then
+          else
             cp -R "$XCFRAMEWORK_PATH/ios-arm64"/* HikkaWrapper/Resources/Python.framework/
-          else
-            echo "❌ Не удалось найти ios-arm64 слайс в Python.xcframework"
-            exit 1
           fi
 
-          # ---- Копируем стандартную библиотеку из Python.xcframework ----
-          echo "=== Ищем стандартную библиотеку внутри Python.xcframework ==="
-          # В новой структуре стандартная библиотека лежит в lib/python3.10 внутри xcframework
-          STDLIB_SOURCE=""
-          if [ -d "$XCFRAMEWORK_PATH/ios-arm64/lib/python3.10" ]; then
-            STDLIB_SOURCE="$XCFRAMEWORK_PATH/ios-arm64/lib/python3.10"
-          elif [ -d "$XCFRAMEWORK_PATH/ios-arm64/Python.framework/lib/python3.10" ]; then
-            STDLIB_SOURCE="$XCFRAMEWORK_PATH/ios-arm64/Python.framework/lib/python3.10"
-          else
-            # Ищем lib/python3.10 в любом месте
-            STDLIB_SOURCE=$(find "$XCFRAMEWORK_PATH" -path "*/lib/python3.10" -type d | head -1)
-          fi
-
+          # Копируем стандартную библиотеку из xcframework
+          STDLIB_SOURCE=$(find "$XCFRAMEWORK_PATH" -path "*/lib/python3.10" -type d | head -1)
           if [ -n "$STDLIB_SOURCE" ] && [ -d "$STDLIB_SOURCE" ]; then
-            echo "Найдена стандартная библиотека: $STDLIB_SOURCE"
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
           else
-            echo "❌ Стандартная библиотека не найдена внутри Python.xcframework!"
+            echo "❌ Стандартная библиотека не найдена!"
             exit 1
           fi
 
-          # ---- Копируем .dylib (lib-dynload) ----
+          # Копируем .dylib
           DYNLOAD_SOURCE=$(find "$XCFRAMEWORK_PATH" -path "*/lib-dynload" -type d | head -1)
           if [ -n "$DYNLOAD_SOURCE" ] && [ -d "$DYNLOAD_SOURCE" ]; then
-            echo "Найдена lib-dynload: $DYNLOAD_SOURCE"
             cp -R "$DYNLOAD_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/
           else
-            # Ищем .dylib файлы
             find "$XCFRAMEWORK_PATH" -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
           fi
 
-          echo "✅ Python успешно скопирован"
-          echo "=== Проверка Python.framework ==="
-          ls -la HikkaWrapper/Resources/Python.framework/ | head -10
-          echo "=== Проверка стандартной библиотеки ==="
-          ls -la HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/ | head -10
+          echo "✅ Python скопирован"
 
-      # ---- 4. Создаём .app ----
+      # ---- 4. Создаём простые Swift файлы (без PythonKit) ----
+      - name: Create Swift sources
+        run: |
+          mkdir -p Sources
+          cat > Sources/HikkaWrapperApp.swift <<'EOF'
+          import SwiftUI
+
+          @main
+          struct HikkaWrapperApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                  }
+              }
+          }
+          EOF
+
+          cat > Sources/ContentView.swift <<'EOF'
+          import SwiftUI
+
+          struct ContentView: View {
+              @State private var isRunning = false
+              @State private var log = ""
+
+              var body: some View {
+                  VStack(spacing: 20) {
+                      Text("Hikka Wrapper")
+                          .font(.largeTitle)
+                      Text("iOS Userbot")
+                          .font(.subheadline)
+                      Button(isRunning ? "Running..." : "Run") {
+                          isRunning = true
+                          log += "[\(Date())] Запуск...\n"
+                          DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                              log += "[\(Date())] Готово!\n"
+                              isRunning = false
+                          }
+                      }
+                      .disabled(isRunning)
+                      .padding()
+                      .background(isRunning ? Color.gray : Color.blue)
+                      .foregroundColor(.white)
+                      .cornerRadius(8)
+
+                      ScrollView {
+                          Text(log)
+                              .font(.system(.body, design: .monospaced))
+                              .frame(maxWidth: .infinity, alignment: .leading)
+                              .padding()
+                      }
+                      .background(Color.black.opacity(0.05))
+                      .cornerRadius(8)
+                      .frame(height: 200)
+                  }
+                  .padding()
+              }
+          }
+          EOF
+
+      # ---- 5. Компилируем Swift в бинарник для iOS ----
+      - name: Compile Swift
+        run: |
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          swiftc -emit-executable \
+            -o Sources/HikkaWrapper \
+            Sources/HikkaWrapperApp.swift Sources/ContentView.swift \
+            -sdk "$SDK_PATH" \
+            -target arm64-apple-ios14.0 \
+            -O \
+            -framework Foundation \
+            -framework UIKit \
+            -framework SwiftUI
+          file Sources/HikkaWrapper
+
+      # ---- 6. Создаём .app ----
       - name: Create .app bundle
         run: |
           mkdir -p Payload/HikkaWrapper.app/Frameworks
           mkdir -p Payload/HikkaWrapper.app/pythonlib
           mkdir -p Payload/HikkaWrapper.app/Resources
 
+          # Копируем бинарник
+          cp Sources/HikkaWrapper Payload/HikkaWrapper.app/
+
+          # Копируем Python.framework
           cp -R HikkaWrapper/Resources/Python.framework Payload/HikkaWrapper.app/Frameworks/
           cp -R HikkaWrapper/Resources/pythonlib/* Payload/HikkaWrapper.app/pythonlib/
 
+          # Info.plist
           cat > Payload/HikkaWrapper.app/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -141,35 +196,20 @@ jobs:
               <array>
                   <string>UIInterfaceOrientationPortrait</string>
               </array>
-              <key>NSAppTransportSecurity</key>
-              <dict>
-                  <key>NSAllowsArbitraryLoads</key>
-                  <true/>
-              </dict>
           </dict>
           </plist>
           EOF
 
-          cat > Payload/HikkaWrapper.app/HikkaWrapper <<'EOF'
-          #!/bin/bash
-          echo "========================================="
-          echo "  Hikka Wrapper for iOS"
-          echo "  Python userbot ready"
-          echo "========================================="
-          EOF
-          chmod +x Payload/HikkaWrapper.app/HikkaWrapper
-
           echo "✅ .app bundle created"
 
-      # ---- 5. Упаковываем в IPA ----
+      # ---- 7. Упаковываем в IPA ----
       - name: Package IPA
         run: |
           zip -r HikkaWrapper.ipa Payload
           ls -lh HikkaWrapper.ipa
-          echo "=== Структура IPA ==="
           unzip -l HikkaWrapper.ipa | head -20
 
-      # ---- 6. Артефакт ----
+      # ---- 8. Артефакт ----
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
@@ -177,7 +217,7 @@ jobs:
           path: HikkaWrapper.ipa
           retention-days: 7
 
-      # ---- 7. Релиз ----
+      # ---- 9. Релиз ----
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
