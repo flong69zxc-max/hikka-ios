@@ -38,70 +38,75 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем и распаковываем Python для iOS ----
+      # ---- 3. Скачиваем Python для iOS ----
       - name: Download Python framework
         run: |
-          # Скачиваем архив
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b4/Python-3.10-iOS-support.b4.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
 
-          # Выводим структуру для отладки
           echo "=== Contents of extracted archive ==="
           ls -la
           echo "=== Searching for Python.xcframework ==="
           find . -name "*.xcframework" -type d
           echo "=== Searching for python-stdlib ==="
           find . -name "python-stdlib" -type d
+          echo "=== Contents of python-stdlib ==="
+          ls -la python-stdlib/ || echo "python-stdlib not found"
 
           # Создаём папки
           mkdir -p HikkaWrapper/Resources/Python.framework
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
 
-          # Копируем Python.xcframework в Python.framework
+          # ---- Копируем Python.xcframework ----
           if [ -d "Python.xcframework" ]; then
-            echo "📦 Found Python.xcframework, copying to Python.framework..."
-            # Копируем содержимое ios-arm64 папки в Python.framework
+            echo "📦 Found Python.xcframework"
             if [ -d "Python.xcframework/ios-arm64" ]; then
               cp -R Python.xcframework/ios-arm64/* HikkaWrapper/Resources/Python.framework/
-              # Переименовываем Python.swiftmodule в Python (если нужно)
-              if [ -f "HikkaWrapper/Resources/Python.framework/Python" ]; then
-                echo "✅ Python binary found"
-              else
-                # Ищем бинарник
-                BINARY=$(find Python.xcframework -name "Python" -type f | head -1)
-                if [ -n "$BINARY" ]; then
-                  cp "$BINARY" HikkaWrapper/Resources/Python.framework/
-                fi
-              fi
+              echo "✅ Copied ios-arm64 contents"
             else
-              # Копируем всё содержимое xcframework
               cp -R Python.xcframework/* HikkaWrapper/Resources/Python.framework/
+              echo "✅ Copied entire xcframework"
             fi
-            echo "✅ Python.xcframework copied"
           else
             echo "❌ Python.xcframework not found!"
             exit 1
           fi
 
-          # Копируем стандартную библиотеку
-          if [ -d "python-stdlib/lib/python3.10" ]; then
-            cp -R python-stdlib/lib/python3.10/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-            echo "✅ python-stdlib copied"
+          # ---- Копируем python-stdlib (ПРАВИЛЬНО) ----
+          if [ -d "python-stdlib" ]; then
+            echo "📦 Found python-stdlib"
+            # Проверяем структуру python-stdlib
+            if [ -d "python-stdlib/lib" ]; then
+              # Копируем всё содержимое lib
+              cp -R python-stdlib/lib/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+              echo "✅ Copied python-stdlib/lib/*"
+            elif [ -d "python-stdlib/python3.10" ]; then
+              cp -R python-stdlib/python3.10/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+              echo "✅ Copied python-stdlib/python3.10/*"
+            else
+              # Копируем всё содержимое python-stdlib
+              cp -R python-stdlib/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+              echo "✅ Copied entire python-stdlib"
+            fi
           else
             echo "❌ python-stdlib not found!"
             exit 1
           fi
 
-          # Копируем динамические библиотеки (если есть)
+          # ---- Копируем динамические библиотеки ----
+          echo "=== Searching for .dylib files ==="
+          find . -name "*.dylib" -type f
           find . -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
           echo "✅ Dynamic libraries copied"
 
-          # Проверяем структуру
+          # ---- Проверяем результат ----
           echo "=== Python.framework contents ==="
-          ls -la HikkaWrapper/Resources/Python.framework/
-          echo "=== pythonlib contents ==="
+          ls -la HikkaWrapper/Resources/Python.framework/ | head -20
+          echo "=== Python stdlib contents ==="
           ls -la HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/ | head -20
+          echo "=== lib-dynload contents ==="
+          ls -la HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ | head -20
 
       # ---- 4. Создаём .app структуру ----
       - name: Create app bundle
