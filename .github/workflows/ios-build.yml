@@ -1,4 +1,4 @@
-name: Build iOS IPA (Unsigned)
+name: Build iOS IPA and Release
 
 on:
   push:
@@ -7,125 +7,66 @@ on:
 
 jobs:
   build:
-    name: Build Unsigned IPA
     runs-on: macos-latest
-    
     steps:
-      # 1. Клонируем основной репозиторий
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Клонируем Hikka
-      - name: Clone Hikka repository
+      # ---- 1. Получаем Hikka ----
+      - name: Clone Hikka
         run: |
-          mkdir -p HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages
-          cd HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages
-          
-          echo "🔄 Cloning hikariatama/hikka..."
-          git clone https://github.com/hikariatama/hikka.git || echo "⚠️ Git clone failed"
-          
-          if [ ! -d "hikka" ]; then
-            echo "📥 Downloading Hikka as ZIP..."
-            curl -L https://github.com/hikariatama/hikka/archive/refs/heads/main.zip -o hikka.zip
+          mkdir -p HikkaWrapper/Resources/pythonlib/python310/site-packages
+          cd HikkaWrapper/Resources/pythonlib/python310/site-packages
+          git clone https://github.com/hikariatama/hikka.git || true
+          if [ ! -d hikka ]; then
+            curl -L https://github.com/hikariatama/hikka/archive/main.zip -o hikka.zip
             unzip -q hikka.zip
-            mv hikka-main hikka 2>/dev/null || true
+            mv hikka-main hikka
             rm hikka.zip
           fi
-          
-          if [ -d "hikka" ]; then
-            echo "✅ Hikka directory exists"
-            ls -la hikka/ | head -20
-          else
-            echo "❌ Hikka not found, creating placeholder"
-            mkdir -p hikka
-            echo "# Hikka placeholder" > hikka/__init__.py
-            echo "def main():" > hikka/__main__.py
-            echo "    print('Hikka userbot running...')" >> hikka/__main__.py
-          fi
 
-      # 3. Устанавливаем Python
-      - name: Set up Python
+      # ---- 2. Установка Python и зависимостей ----
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 4. Устанавливаем зависимости
       - name: Install Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          
-          mkdir -p HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages
-          
-          echo "📦 Installing dependencies..."
-          pip install telethon yarl aiohttp cryptography pillow -t HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/
-          
-          if [ -f "HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt" ]; then
-            pip install -r HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
+          pip install telethon yarl aiohttp cryptography pillow -t HikkaWrapper/Resources/pythonlib/python310/site-packages/
+          if [ -f HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt ]; then
+            pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
-          
-          echo "✅ Dependencies installed"
-          ls HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/site-packages/ | head -20
 
-      # 5. Скачиваем Python.framework
+      # ---- 3. Скачиваем Python.framework для iOS ----
       - name: Download Python framework
         run: |
-          echo "📥 Downloading Python framework..."
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b4/Python-3.10-iOS-support.b4.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
-          
-          mkdir -p HikkaWrapper/HikkaWrapper/Resources/Python.framework
-          mkdir -p HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10
-          mkdir -p HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
-          
-          if [ -d "Python/Resources/Python.framework" ]; then
-            cp -R Python/Resources/Python.framework/* HikkaWrapper/HikkaWrapper/Resources/Python.framework/
-            echo "✅ Python.framework copied"
-          fi
-          
-          if [ -d "Python/Resources/python-stdlib/lib/python3.10" ]; then
-            cp -R Python/Resources/python-stdlib/lib/python3.10/* HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
-            echo "✅ Python stdlib copied"
-          fi
-          
-          if [ -d "Python/Resources/lib" ]; then
-            find Python/Resources/lib -name "*.dylib" -exec cp {} HikkaWrapper/HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
-            echo "✅ Dynamic libraries copied"
-          fi
+          mkdir -p HikkaWrapper/Resources/Python.framework
+          mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload
+          cp -R Python/Resources/Python.framework/* HikkaWrapper/Resources/Python.framework/
+          cp -R Python/Resources/python-stdlib/lib/python3.10/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
+          find Python/Resources/lib -name "*.dylib" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
 
-      # 6. Создаём структуру .app
+      # ---- 4. Создаём .app структуру ----
       - name: Create app bundle
         run: |
-          # Создаём папки
-          mkdir -p Payload/HikkaWrapper.app/Frameworks
-          mkdir -p Payload/HikkaWrapper.app/pythonlib
-          mkdir -p Payload/HikkaWrapper.app/Resources
-          
-          # Копируем Python.framework
-          if [ -d "HikkaWrapper/HikkaWrapper/Resources/Python.framework" ]; then
-            cp -R HikkaWrapper/HikkaWrapper/Resources/Python.framework Payload/HikkaWrapper.app/Frameworks/
-            echo "✅ Python.framework copied to app"
-          fi
-          
-          # Копируем pythonlib
-          if [ -d "HikkaWrapper/HikkaWrapper/Resources/pythonlib" ]; then
-            cp -R HikkaWrapper/HikkaWrapper/Resources/pythonlib/* Payload/HikkaWrapper.app/pythonlib/
-            echo "✅ pythonlib copied to app"
-          fi
-          
-          # Создаём Info.plist
-          cat > Payload/HikkaWrapper.app/Info.plist << 'EOF'
+          APP_DIR=Payload/HikkaWrapper.app
+          mkdir -p $APP_DIR/Frameworks $APP_DIR/pythonlib $APP_DIR/Resources
+          cp -R HikkaWrapper/Resources/Python.framework $APP_DIR/Frameworks/
+          cp -R HikkaWrapper/Resources/pythonlib/* $APP_DIR/pythonlib/
+
+          # Info.plist
+          cat > $APP_DIR/Info.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-              <key>CFBundleDevelopmentRegion</key>
-              <string>en</string>
               <key>CFBundleExecutable</key>
               <string>HikkaWrapper</string>
               <key>CFBundleIdentifier</key>
               <string>com.hikka.wrapper</string>
-              <key>CFBundleInfoDictionaryVersion</key>
-              <string>6.0</string>
               <key>CFBundleName</key>
               <string>HikkaWrapper</string>
               <key>CFBundlePackageType</key>
@@ -133,13 +74,9 @@ jobs:
               <key>CFBundleShortVersionString</key>
               <string>1.0</string>
               <key>CFBundleVersion</key>
-              <string>1</string>
+              <string>${{ github.run_number }}</string>
               <key>LSRequiresIPhoneOS</key>
               <true/>
-              <key>UIRequiredDeviceCapabilities</key>
-              <array>
-                  <string>armv7</string>
-              </array>
               <key>UISupportedInterfaceOrientations</key>
               <array>
                   <string>UIInterfaceOrientationPortrait</string>
@@ -152,33 +89,47 @@ jobs:
           </dict>
           </plist>
           EOF
-          
-          # Создаём исполняемый файл
-          cat > Payload/HikkaWrapper.app/HikkaWrapper << 'EOF'
-          #!/bin/bash
-          echo "Hikka Wrapper for iOS"
-          echo "Starting Python userbot..."
-          EOF
-          chmod +x Payload/HikkaWrapper.app/HikkaWrapper
-          
-          # Проверяем структуру
-          echo "📂 App bundle structure:"
-          ls -la Payload/HikkaWrapper.app/
 
-      # 7. Создаём IPA
-      - name: Create IPA
+          # Исполняемый файл-заглушка (можно заменить на реальный бинарник)
+          cat > $APP_DIR/HikkaWrapper <<'EOF'
+          #!/bin/bash
+          echo "========================================="
+          echo "  Hikka Wrapper for iOS"
+          echo "  Python userbot ready"
+          echo "========================================="
+          # Здесь можно запустить Python с помощью PythonKit,
+          # но для демонстрации оставляем заглушку
+          EOF
+          chmod +x $APP_DIR/HikkaWrapper
+
+          # Проверка структуры
+          echo "✅ App bundle created:"
+          ls -la $APP_DIR
+
+      # ---- 5. Упаковываем в IPA ----
+      - name: Package IPA
         run: |
           cd Payload
           zip -r ../HikkaWrapper.ipa .
           cd ..
-          
-          echo "✅ IPA created"
           ls -lh HikkaWrapper.ipa
 
-      # 8. Загружаем артефакт
-      - name: Upload IPA
+      # ---- 6. Загружаем артефакт (для ручного скачивания) ----
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: HikkaWrapper-unsigned
           path: HikkaWrapper.ipa
           retention-days: 7
+
+      # ---- 7. Создаём Release и прикрепляем IPA ----
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.run_number }}
+          name: "Build #${{ github.run_number }}"
+          draft: false
+          prerelease: true
+          files: HikkaWrapper.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
