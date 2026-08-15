@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true   # подавляет предупреждение о Node.js 20
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
 jobs:
   build:
@@ -68,8 +68,8 @@ jobs:
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
           fi
 
-          # Копируем .dylib, исключая папку HikkaWrapper и подавляя предупреждения
-          find . -name "*.dylib" -not -path "*/HikkaWrapper/*" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
+          # Копируем .dylib, исключая папку HikkaWrapper и подавляя все сообщения
+          find . -name "*.dylib" -not -path "./HikkaWrapper/*" -exec cp -n {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
           echo "✅ Python resources prepared"
 
       # ---- 4. Создаём SwiftUI приложение ----
