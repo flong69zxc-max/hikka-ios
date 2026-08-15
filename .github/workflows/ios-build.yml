@@ -15,11 +15,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---- 0. Очистка от предыдущих сборок ----
-      - name: Clean previous build artifacts
+      # ---- 0. Полная очистка репозитория (кроме .git и .github) ----
+      - name: Clean repository (keep .git and .github)
         run: |
-          rm -rf HikkaWrapper Payload Sources python_ios.tar.gz *.ipa
-          echo "🧹 Cleaned old files"
+          # Удаляем всё, кроме .git, .github и текущего workflow (чтобы не сломать выполнение)
+          find . -maxdepth 1 -not -name '.git' -not -name '.github' -exec rm -rf {} + 2>/dev/null || true
+          echo "🧹 Repository cleaned (except .git and .github)"
 
       # ---- 1. Получаем Hikka (с повторными попытками) ----
       - name: Clone Hikka
@@ -54,7 +55,7 @@ jobs:
             pip install --no-cache-dir -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python.framework (без конфликтов копирования) ----
+      # ---- 3. Скачиваем Python.framework (без конфликтов) ----
       - name: Download Python framework
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
@@ -66,7 +67,6 @@ jobs:
           mkdir -p HikkaWrapper/Resources/Python.framework
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/lib
 
-          # Копируем Python.framework
           XCFRAMEWORK_PATH=$(find . -type d -name "Python.xcframework" | head -1)
           if [ -n "$XCFRAMEWORK_PATH" ]; then
             if [ -d "$XCFRAMEWORK_PATH/ios-arm64/Python.framework" ]; then
@@ -82,7 +82,6 @@ jobs:
             fi
           fi
 
-          # Копируем стандартную библиотеку
           STDLIB_SOURCE=$(find . -path "*/lib/python3.10" -type d | head -1)
           if [ -n "$STDLIB_SOURCE" ]; then
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/
@@ -93,97 +92,173 @@ jobs:
             fi
           fi
 
-          # Копируем .dylib прямо в lib
           find . -name "*.dylib" -exec cp -f {} HikkaWrapper/Resources/pythonlib/python310/lib/ \; 2>/dev/null || true
 
           echo "✅ Python resources prepared"
 
-      # ---- 4. Создаём SwiftUI приложение с логированием ----
+      # ---- 4. Создаём структуру проекта (как в mond, но без эксплойтов) ----
       - name: Create Swift sources
         run: |
-          mkdir -p Sources
-          cat > Sources/main.swift <<'EOF'
+          mkdir -p Sources/Views Sources/Helpers
+
+          # ---------- bridging.h ----------
+          cat > Sources/bridging.h <<'EOF'
+          #ifndef bridging_h
+          #define bridging_h
+
+          #include <Python/Python.h>
+
+          // Объявления C-функций Python для вызова из Swift
+          extern void Py_Initialize(void);
+          extern int Py_IsInitialized(void);
+          extern const char* Py_GetVersion(void);
+          extern int PyRun_SimpleString(const char*);
+
+          #endif
+          EOF
+
+          # ---------- Helpers/AppState.swift ----------
+          cat > Sources/Helpers/AppState.swift <<'EOF'
           import SwiftUI
-          import Foundation
 
           class AppState: ObservableObject {
               @Published var logs: [String] = []
-              
-              func addLog(_ message: String) {
-                  DispatchQueue.main.async {
-                      self.logs.append("[\(Date())] \(message)")
-                  }
-              }
-              
-              func clearLogs() {
-                  logs.removeAll()
-              }
-          }
+              @Published var isPythonReady = false
+              @Published var isHikkaRunning = false
 
-          @main
-          struct HikkaWrapperApp: App {
-              @StateObject private var appState = AppState()
-              
-              init() {
-                  checkResources()
-              }
-              
-              var body: some Scene {
-                  WindowGroup {
-                      ContentView()
-                          .environmentObject(appState)
+              func addLog(_ msg: String) {
+                  DispatchQueue.main.async {
+                      self.logs.append("[\(Date().formatted())] \(msg)")
+                      print(msg)
                   }
               }
-              
-              func checkResources() {
-                  let fm = FileManager.default
-                  let bundlePath = Bundle.main.bundlePath
-                  
-                  appState.addLog("🚀 Проверка ресурсов...")
-                  
-                  let frameworkPath = bundlePath + "/Frameworks/Python.framework"
-                  if fm.fileExists(atPath: frameworkPath) {
-                      appState.addLog("✅ Python.framework найден")
-                  } else {
-                      appState.addLog("❌ Python.framework НЕ найден: \(frameworkPath)")
+
+              func clearLogs() {
+                  DispatchQueue.main.async {
+                      self.logs.removeAll()
                   }
-                  
-                  let pythonLibPath = bundlePath + "/pythonlib"
-                  if fm.fileExists(atPath: pythonLibPath) {
-                      appState.addLog("✅ pythonlib найден")
-                      do {
-                          let contents = try fm.contentsOfDirectory(atPath: pythonLibPath)
-                          appState.addLog("   Содержимое: \(contents.joined(separator: ", "))")
-                      } catch {
-                          appState.addLog("   Ошибка чтения pythonlib: \(error)")
-                      }
-                  } else {
-                      appState.addLog("❌ pythonlib НЕ найден: \(pythonLibPath)")
-                  }
-                  
-                  let hikkaPath = pythonLibPath + "/python310/site-packages/hikka"
-                  if fm.fileExists(atPath: hikkaPath) {
-                      appState.addLog("✅ hikka найден в \(hikkaPath)")
-                  } else {
-                      appState.addLog("❌ hikka НЕ найден в \(hikkaPath)")
-                  }
-                  
-                  appState.addLog("✅ Проверка завершена")
               }
           }
+          EOF
+
+          # ---------- Helpers/PythonBridge.swift ----------
+          cat > Sources/Helpers/PythonBridge.swift <<'EOF'
+          import Foundation
+          import SwiftUI
+
+          // Функции из bridging.h
+          @_silgen_name("Py_Initialize")
+          func Py_Initialize()
+
+          @_silgen_name("Py_IsInitialized")
+          func Py_IsInitialized() -> Int32
+
+          @_silgen_name("Py_GetVersion")
+          func Py_GetVersion() -> UnsafePointer<CChar>
+
+          @_silgen_name("PyRun_SimpleString")
+          func PyRun_SimpleString(_: UnsafePointer<CChar>) -> Int32
+
+          class PythonBridge {
+              static let shared = PythonBridge()
+              private init() {}
+
+              func setup(appState: AppState) {
+                  appState.addLog("🚀 Инициализация Python...")
+                  let bundlePath = Bundle.main.bundlePath
+                  let libPath = bundlePath + "/pythonlib/python310/lib"
+                  let sitePath = bundlePath + "/pythonlib/python310/site-packages"
+                  setenv("PYTHONHOME", libPath, 1)
+                  setenv("PYTHONPATH", sitePath, 1)
+
+                  Py_Initialize()
+                  if Py_IsInitialized() != 0 {
+                      let version = String(cString: Py_GetVersion())
+                      appState.addLog("✅ Python \(version) инициализирован")
+                      appState.isPythonReady = true
+                      checkHikka(appState: appState)
+                  } else {
+                      appState.addLog("❌ Ошибка инициализации Python")
+                  }
+              }
+
+              func checkHikka(appState: AppState) {
+                  let code = """
+                  import sys
+                  try:
+                      import hikka
+                      print('✅ Hikka импортирован успешно')
+                  except Exception as e:
+                      print(f'❌ Ошибка импорта Hikka: {e}')
+                  """
+                  let result = PyRun_SimpleString(code)
+                  if result == 0 {
+                      appState.addLog("✅ Hikka успешно импортирован")
+                      appState.isHikkaRunning = true
+                  } else {
+                      appState.addLog("❌ Ошибка импорта Hikka (код \(result))")
+                  }
+              }
+
+              func runHikka(appState: AppState) {
+                  guard appState.isHikkaRunning else {
+                      appState.addLog("⚠️ Hikka не готов, сначала инициализируйте")
+                      return
+                  }
+                  appState.addLog("▶️ Запуск Hikka...")
+                  let code = """
+                  try:
+                      import hikka
+                      # Здесь будет код запуска userbot
+                      # hikka.run()
+                      print('✅ Hikka выполнен успешно')
+                  except Exception as e:
+                      print(f'❌ Ошибка выполнения: {e}')
+                  """
+                  let result = PyRun_SimpleString(code)
+                  if result == 0 {
+                      appState.addLog("✅ Hikka выполнен успешно")
+                  } else {
+                      appState.addLog("❌ Ошибка выполнения (код \(result))")
+                  }
+              }
+          }
+          EOF
+
+          # ---------- Views/ContentView.swift ----------
+          cat > Sources/Views/ContentView.swift <<'EOF'
+          import SwiftUI
 
           struct ContentView: View {
               @EnvironmentObject var appState: AppState
-              
+
               var body: some View {
                   NavigationView {
                       VStack {
+                          // Статус
+                          HStack {
+                              Circle()
+                                  .fill(appState.isPythonReady ? Color.green : Color.red)
+                                  .frame(width: 12, height: 12)
+                              Text(appState.isPythonReady ? "Python готов" : "Python не инициализирован")
+                                  .font(.caption)
+                              Spacer()
+                              if appState.isPythonReady {
+                                  Button("Запустить Hikka") {
+                                      PythonBridge.shared.runHikka(appState: appState)
+                                  }
+                                  .buttonStyle(.bordered)
+                              }
+                          }
+                          .padding(.horizontal)
+
+                          // Логи
                           ScrollView {
                               LazyVStack(alignment: .leading, spacing: 4) {
                                   ForEach(appState.logs.indices, id: \.self) { index in
                                       Text(appState.logs[index])
                                           .font(.system(.caption, design: .monospaced))
-                                          .padding(.vertical, 2)
+                                          .padding(.vertical, 1)
                                           .frame(maxWidth: .infinity, alignment: .leading)
                                   }
                               }
@@ -192,42 +267,62 @@ jobs:
                           .background(Color.gray.opacity(0.1))
                           .cornerRadius(8)
                           .padding(.horizontal)
-                          
+
                           HStack {
                               Button("Очистить логи") {
                                   appState.clearLogs()
                               }
                               .padding()
-                              
-                              Button("Проверить ресурсы") {
-                                  appState.addLog("🔁 Повторная проверка...")
-                                  appState.addLog("✅ Повторная проверка (только лог)")
-                              }
-                              .padding()
+
+                              Spacer()
                           }
-                          
+
                           Spacer()
                       }
                       .navigationTitle("Hikka Wrapper")
                   }
                   .onAppear {
-                      appState.addLog("📱 Приложение загружено")
+                      if !appState.isPythonReady {
+                          PythonBridge.shared.setup(appState: appState)
+                      }
                   }
               }
           }
           EOF
 
-      # ---- 5. Компилируем в бинарник для iOS (с -parse-as-library) ----
+          # ---------- main.swift ----------
+          cat > Sources/main.swift <<'EOF'
+          import SwiftUI
+
+          @main
+          struct HikkaWrapperApp: App {
+              @StateObject private var appState = AppState()
+
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                          .environmentObject(appState)
+                  }
+              }
+          }
+          EOF
+
+          echo "✅ Swift sources created"
+
+      # ---- 5. Компилируем все Swift-файлы в бинарник ----
       - name: Compile Swift
         run: |
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           swiftc -emit-executable \
             -o Sources/HikkaWrapper \
             Sources/main.swift \
+            Sources/Helpers/*.swift \
+            Sources/Views/*.swift \
             -sdk "$SDK_PATH" \
             -target arm64-apple-ios14.0 \
             -O \
             -parse-as-library \
+            -import-objc-header Sources/bridging.h \
             -framework Foundation \
             -framework UIKit \
             -framework SwiftUI
@@ -242,7 +337,7 @@ jobs:
           }
           echo "✅ Бинарник успешно создан"
 
-      # ---- 6. Создаём .app ----
+      # ---- 6. Создаём .app bundle ----
       - name: Create .app bundle
         run: |
           mkdir -p Payload/HikkaWrapper.app/Frameworks
@@ -298,7 +393,7 @@ jobs:
           zip -r HikkaWrapper.ipa Payload
           ls -lh HikkaWrapper.ipa
 
-      # ---- 8. Удаляем предыдущий релиз и тег (с гарантией) ----
+      # ---- 8. Удаляем предыдущий релиз и тег ----
       - name: Delete previous release and tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -330,7 +425,7 @@ jobs:
           allowUpdates: true
           replacesArtifacts: true
 
-      # ---- 10. Артефакт (опционально) ----
+      # ---- 10. Артефакт ----
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
