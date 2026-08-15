@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true   # подавляет предупреждение о Node.js 20
+
 jobs:
   build:
     runs-on: macos-latest
@@ -15,7 +18,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---- 1. Получаем Hikka (оставляем для будущего) ----
+      # ---- 1. Получаем Hikka ----
       - name: Clone Hikka
         run: |
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/site-packages
@@ -41,7 +44,7 @@ jobs:
             pip install -r HikkaWrapper/Resources/pythonlib/python310/site-packages/hikka/requirements.txt -t HikkaWrapper/Resources/pythonlib/python310/site-packages/ || true
           fi
 
-      # ---- 3. Скачиваем Python.framework для iOS ----
+      # ---- 3. Скачиваем Python.framework (без identical) ----
       - name: Download Python framework
         run: |
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
@@ -65,7 +68,7 @@ jobs:
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/
           fi
 
-          # Копируем .dylib, исключая уже созданную папку HikkaWrapper
+          # Копируем .dylib, исключая папку HikkaWrapper и подавляя предупреждения
           find . -name "*.dylib" -not -path "*/HikkaWrapper/*" -exec cp {} HikkaWrapper/Resources/pythonlib/python310/lib/python3.10/lib-dynload/ \; 2>/dev/null || true
           echo "✅ Python resources prepared"
 
