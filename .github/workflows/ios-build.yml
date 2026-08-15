@@ -26,7 +26,6 @@ jobs:
         run: |
           mkdir -p HikkaWrapper/Resources/pythonlib/python310/site-packages
           cd HikkaWrapper/Resources/pythonlib/python310/site-packages
-          # Пытаемся клонировать, если не выйдет – скачиваем архив
           for i in {1..3}; do
             if git clone https://github.com/hikariatama/hikka.git; then
               break
@@ -61,7 +60,6 @@ jobs:
           curl -L https://github.com/beeware/Python-Apple-support/releases/download/3.10-b11/Python-3.10-iOS-support.b11.tar.gz -o python_ios.tar.gz
           tar -xzf python_ios.tar.gz
 
-          # Полная очистка старых ресурсов
           rm -rf HikkaWrapper/Resources/Python.framework
           rm -rf HikkaWrapper/Resources/pythonlib/python310/lib
 
@@ -78,92 +76,148 @@ jobs:
             fi
           else
             echo "⚠️ Python.xcframework not found, checking fallback..."
-            # fallback: ищем любую папку с Python.framework
             FRAMEWORK_PATH=$(find . -name "Python.framework" -type d | head -1)
             if [ -n "$FRAMEWORK_PATH" ]; then
               cp -R "$FRAMEWORK_PATH"/* HikkaWrapper/Resources/Python.framework/
             fi
           fi
 
-          # Копируем стандартную библиотеку (ищем наиболее полную)
+          # Копируем стандартную библиотеку
           STDLIB_SOURCE=$(find . -path "*/lib/python3.10" -type d | head -1)
           if [ -n "$STDLIB_SOURCE" ]; then
             cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/
           else
-            # альтернативный поиск
             STDLIB_SOURCE=$(find . -name "os.py" -exec dirname {} \; | head -1)
             if [ -n "$STDLIB_SOURCE" ]; then
               cp -R "$STDLIB_SOURCE"/* HikkaWrapper/Resources/pythonlib/python310/lib/
             fi
           fi
 
-          # Копируем все .dylib прямо в lib (без lib-dynload, чтобы избежать конфликтов)
+          # Копируем .dylib прямо в lib
           find . -name "*.dylib" -exec cp -f {} HikkaWrapper/Resources/pythonlib/python310/lib/ \; 2>/dev/null || true
 
           echo "✅ Python resources prepared"
 
-      # ---- 4. Создаём SwiftUI приложение ----
+      # ---- 4. Создаём SwiftUI приложение с логированием ----
       - name: Create Swift sources
         run: |
           mkdir -p Sources
           cat > Sources/main.swift <<'EOF'
           import SwiftUI
+          import Foundation
+
+          class AppState: ObservableObject {
+              @Published var logs: [String] = []
+              
+              func addLog(_ message: String) {
+                  DispatchQueue.main.async {
+                      self.logs.append("[\(Date())] \(message)")
+                  }
+              }
+              
+              func clearLogs() {
+                  logs.removeAll()
+              }
+          }
 
           @main
-          struct AppMain: App {
+          struct HikkaWrapperApp: App {
+              @StateObject private var appState = AppState()
+              
+              init() {
+                  checkResources()
+              }
+              
               var body: some Scene {
                   WindowGroup {
                       ContentView()
+                          .environmentObject(appState)
                   }
+              }
+              
+              func checkResources() {
+                  let fm = FileManager.default
+                  let bundlePath = Bundle.main.bundlePath
+                  
+                  appState.addLog("🚀 Проверка ресурсов...")
+                  
+                  let frameworkPath = bundlePath + "/Frameworks/Python.framework"
+                  if fm.fileExists(atPath: frameworkPath) {
+                      appState.addLog("✅ Python.framework найден")
+                  } else {
+                      appState.addLog("❌ Python.framework НЕ найден: \(frameworkPath)")
+                  }
+                  
+                  let pythonLibPath = bundlePath + "/pythonlib"
+                  if fm.fileExists(atPath: pythonLibPath) {
+                      appState.addLog("✅ pythonlib найден")
+                      do {
+                          let contents = try fm.contentsOfDirectory(atPath: pythonLibPath)
+                          appState.addLog("   Содержимое: \(contents.joined(separator: ", "))")
+                      } catch {
+                          appState.addLog("   Ошибка чтения pythonlib: \(error)")
+                      }
+                  } else {
+                      appState.addLog("❌ pythonlib НЕ найден: \(pythonLibPath)")
+                  }
+                  
+                  let hikkaPath = pythonLibPath + "/python310/site-packages/hikka"
+                  if fm.fileExists(atPath: hikkaPath) {
+                      appState.addLog("✅ hikka найден в \(hikkaPath)")
+                  } else {
+                      appState.addLog("❌ hikka НЕ найден в \(hikkaPath)")
+                  }
+                  
+                  appState.addLog("✅ Проверка завершена")
               }
           }
 
           struct ContentView: View {
-              @State private var counter = 0
-              @State private var log = "Нажми кнопку"
-
+              @EnvironmentObject var appState: AppState
+              
               var body: some View {
-                  VStack(spacing: 20) {
-                      Image(systemName: "apple.terminal")
-                          .font(.system(size: 60))
-                          .foregroundColor(.blue)
-                      Text("Hikka Wrapper")
-                          .font(.largeTitle)
-                          .fontWeight(.bold)
-                      Text("iOS Userbot")
-                          .font(.subheadline)
-                          .foregroundColor(.gray)
-
-                      Button(action: {
-                          counter += 1
-                          log = "Нажатий: \(counter)\nПоследнее: \(Date())"
-                      }) {
-                          Text("Нажми меня")
+                  NavigationView {
+                      VStack {
+                          ScrollView {
+                              LazyVStack(alignment: .leading, spacing: 4) {
+                                  ForEach(appState.logs.indices, id: \.self) { index in
+                                      Text(appState.logs[index])
+                                          .font(.system(.caption, design: .monospaced))
+                                          .padding(.vertical, 2)
+                                          .frame(maxWidth: .infinity, alignment: .leading)
+                                  }
+                              }
                               .padding()
-                              .frame(maxWidth: .infinity)
-                              .background(Color.blue)
-                              .foregroundColor(.white)
-                              .cornerRadius(12)
-                      }
-                      .padding(.horizontal)
-
-                      ScrollView {
-                          Text(log)
-                              .font(.system(.body, design: .monospaced))
-                              .frame(maxWidth: .infinity, alignment: .leading)
+                          }
+                          .background(Color.gray.opacity(0.1))
+                          .cornerRadius(8)
+                          .padding(.horizontal)
+                          
+                          HStack {
+                              Button("Очистить логи") {
+                                  appState.clearLogs()
+                              }
                               .padding()
+                              
+                              Button("Проверить ресурсы") {
+                                  appState.addLog("🔁 Повторная проверка...")
+                                  appState.addLog("✅ Повторная проверка (только лог)")
+                              }
+                              .padding()
+                          }
+                          
+                          Spacer()
                       }
-                      .background(Color.black.opacity(0.05))
-                      .cornerRadius(8)
-                      .frame(height: 150)
-                      .padding(.horizontal)
+                      .navigationTitle("Hikka Wrapper")
                   }
-                  .padding()
+                  .onAppear {
+                      appState.addLog("📱 Приложение загружено")
+                  }
               }
           }
           EOF
 
-      # ---- 5. Компилируем в бинарник для iOS (с ключами для библиотек) ----
+      # ---- 5. Компилируем в бинарник для iOS (с -parse-as-library) ----
       - name: Compile Swift
         run: |
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -250,12 +304,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v${{ github.run_number }}"
-          # Проверяем наличие релиза и удаляем
           if gh release view "$TAG" &>/dev/null; then
             echo "Deleting existing release $TAG"
             gh release delete "$TAG" --yes
           fi
-          # Проверяем наличие тега локально и на удалённом
           if git rev-parse "$TAG" &>/dev/null; then
             echo "Deleting local tag $TAG"
             git tag -d "$TAG"
