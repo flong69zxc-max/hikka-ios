@@ -14,5 +14,5 @@ iOS-оболочка для запуска Python-юзербота Hikka чер�
 ### 1. Клонирование репозитория
 
 ```bash
-git clone https://github.com/yourusername/HikkaWrapper.git
+git clone https://github.com/flong69zxc-max/hikka-ios.git
 cd HikkaWrapper
